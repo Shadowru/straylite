@@ -6,6 +6,8 @@ struct SessionDetailView: View {
     let session: Session
     @State private var isSharing = false
     @State private var shareURL: URL?
+    @State private var isZipping = false
+    @State private var zipError: String?
 
     var body: some View {
         Form {
@@ -33,21 +35,56 @@ struct SessionDetailView: View {
             }
             Section {
                 Button {
-                    if let folder = session.folderURL,
-                       FileManager.default.fileExists(atPath: folder.path) {
-                        shareURL = folder
-                        isSharing = true
-                    }
+                    shareAsZip()
                 } label: {
-                    Label("Share scan folder", systemImage: "square.and.arrow.up")
+                    HStack {
+                        if isZipping {
+                            ProgressView()
+                                .controlSize(.small)
+                                .padding(.trailing, 4)
+                            Text("Zipping…")
+                        } else {
+                            Label("Share scan (.zip)", systemImage: "square.and.arrow.up")
+                        }
+                    }
                 }
-                .disabled(session.folderURL == nil)
+                .disabled(session.folderURL == nil || isZipping)
+                if let err = zipError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
         }
         .navigationTitle(session.name)
         .sheet(isPresented: $isSharing) {
             if let url = shareURL {
                 ShareSheet(items: [url])
+            }
+        }
+    }
+
+    private func shareAsZip() {
+        guard let folder = session.folderURL,
+              FileManager.default.fileExists(atPath: folder.path) else { return }
+        isZipping = true
+        zipError = nil
+        let zipName = session.name
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: ":", with: "-")
+        Task.detached {
+            do {
+                let url = try FolderZipper.zip(folder, named: zipName)
+                await MainActor.run {
+                    shareURL = url
+                    isZipping = false
+                    isSharing = true
+                }
+            } catch {
+                await MainActor.run {
+                    isZipping = false
+                    zipError = "Zip failed: \(error.localizedDescription)"
+                }
             }
         }
     }

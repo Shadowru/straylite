@@ -3,7 +3,7 @@ import UIKit
 import ARKit
 import RoomPlan
 import Combine
-import CoreImage
+@preconcurrency import CoreImage
 
 /// Owns the ARSession and the RoomCaptureSession that piggybacks on it.
 /// Encoder hookups (RGB/depth/odometry) live in `session(_:didUpdate:)`.
@@ -23,8 +23,12 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     @Published private(set) var datasetURL: URL?
     @Published private(set) var previewImage: UIImage?
 
-    private let previewContext = CIContext(options: [.useSoftwareRenderer: false])
+    // CIContext is documented as thread-safe; declared nonisolated so the
+    // off-main rendering closure can use it without an actor hop.
+    nonisolated private let previewContext = CIContext(options: [.useSoftwareRenderer: false])
+    nonisolated private let previewQueue = DispatchQueue(label: "straylite.preview", qos: .userInitiated)
     private var previewThrottle: Int = 0
+    private var previewInFlight = false
 
     let session = ARSession()
     private var roomCaptureSession: RoomCaptureSession?
@@ -182,10 +186,12 @@ extension CaptureCoordinator: ARSessionDelegate {
         let pixelBuffer = frame.capturedImage
         Task { @MainActor [weak self] in
             guard let self else { return }
-            // Update preview at ~6 fps regardless of recording state.
+            // Render at ~30 fps: every 2nd frame, off the main thread, with
+            // a single-flight gate so back-pressure doesn't queue up.
             self.previewThrottle += 1
-            if self.previewThrottle % 10 == 0 {
-                self.previewImage = self.makePreview(from: pixelBuffer)
+            if self.previewThrottle % 2 == 0 && !self.previewInFlight {
+                self.previewInFlight = true
+                self.renderPreview(from: pixelBuffer)
             }
             guard self.state == .running else { return }
             self.inboundFrameCount += 1
@@ -196,10 +202,16 @@ extension CaptureCoordinator: ARSessionDelegate {
         }
     }
 
-    private func makePreview(from buffer: CVPixelBuffer) -> UIImage? {
-        let ci = CIImage(cvPixelBuffer: buffer)
-            .oriented(.right)  // ARKit gives landscape buffers; phone is portrait
-        guard let cg = previewContext.createCGImage(ci, from: ci.extent) else { return nil }
-        return UIImage(cgImage: cg)
+    private func renderPreview(from buffer: CVPixelBuffer) {
+        previewQueue.async { [weak self] in
+            guard let self else { return }
+            let ci = CIImage(cvPixelBuffer: buffer).oriented(.right)
+            let cg = self.previewContext.createCGImage(ci, from: ci.extent)
+            let img = cg.map { UIImage(cgImage: $0) }
+            DispatchQueue.main.async {
+                self.previewImage = img
+                self.previewInFlight = false
+            }
+        }
     }
 }
