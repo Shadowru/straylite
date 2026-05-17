@@ -126,8 +126,14 @@ struct SessionDetailView: View {
                 let service = UploadService()
                 for await event in service.upload(zipURL: zip, settings: settings) {
                     switch event {
-                    case .uploading:
-                        await MainActor.run { uploadProgress = "Uploading…" }
+                    case .uploading(let sent, let total):
+                        let mb = Double(sent) / 1_048_576
+                        let totMb = Double(total) / 1_048_576
+                        let pct = total > 0 ? Int(100 * Double(sent) / Double(total)) : 0
+                        await MainActor.run {
+                            uploadProgress = String(format: "Uploading %d%% (%.1f / %.1f MB)",
+                                                    pct, mb, totMb)
+                        }
                     case .pending:
                         await MainActor.run { uploadProgress = "Queued on server…" }
                     case .processing(let message):

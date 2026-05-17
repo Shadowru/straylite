@@ -130,6 +130,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                 guard let self, let t = self.startTime else { return }
                 self.elapsedSeconds = Date().timeIntervalSince(t)
             }
+        // Prevent the screen from auto-locking mid-scan.
+        UIApplication.shared.isIdleTimerDisabled = true
         state = .running
     }
 
@@ -144,6 +146,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     }
 
     private func finishWith(error: String?) {
+        UIApplication.shared.isIdleTimerDisabled = false
         session.pause()
         roomCaptureSession = nil
 

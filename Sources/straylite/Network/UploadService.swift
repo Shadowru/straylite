@@ -50,13 +50,13 @@ final class UploadService: NSObject, URLSessionTaskDelegate, @unchecked Sendable
     }
 
     private var progressContinuation: AsyncStream<Event>.Continuation?
-    private var taskByID: [Int: AsyncStream<Event>.Continuation] = [:]
 
     /// Returns an AsyncStream that fires multiple events: upload progress,
     /// status changes during processing, and finally a `.done` with the
     /// local URL of the downloaded `.set`, or `.failed`.
     func upload(zipURL: URL, settings: AppSettings) -> AsyncStream<Event> {
         AsyncStream<Event> { continuation in
+            self.progressContinuation = continuation
             Task.detached {
                 guard settings.canUpload, let base = URL(string: settings.serverURL) else {
                     continuation.yield(.failed(reason: UploadError.badServer.localizedDescription))
@@ -121,7 +121,9 @@ final class UploadService: NSObject, URLSessionTaskDelegate, @unchecked Sendable
                      forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(settings.uploadToken)",
                      forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 600
+        // 60 min per-segment timeout (URLSession resets it on every byte sent);
+        // for slow mobile uploads of 100-300 MB this leaves plenty of margin.
+        req.timeoutInterval = 3600
 
         // Build the multipart body to a temp file so we don't keep all bytes
         // in memory (zips can be 150-300 MB).
@@ -150,8 +152,11 @@ final class UploadService: NSObject, URLSessionTaskDelegate, @unchecked Sendable
         try write("\r\n--\(boundary)--\r\n")
         try writer.synchronize()
 
-        let session = URLSession(configuration: .default,
-                                 delegate: self,
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 3600        // per-segment
+        cfg.timeoutIntervalForResource = 7200       // total operation cap
+        cfg.waitsForConnectivity = true
+        let session = URLSession(configuration: cfg, delegate: self,
                                  delegateQueue: nil)
         let (data, response) = try await session.upload(for: req, fromFile: bodyTmp,
                                                         delegate: self)
@@ -210,8 +215,9 @@ final class UploadService: NSObject, URLSessionTaskDelegate, @unchecked Sendable
                     didSendBodyData bytesSent: Int64,
                     totalBytesSent: Int64,
                     totalBytesExpectedToSend: Int64) {
-        // We don't yet wire this into the AsyncStream; left as a hook for
-        // future progress UI.
-        _ = (totalBytesSent, totalBytesExpectedToSend)
+        progressContinuation?.yield(.uploading(
+            bytesSent: totalBytesSent,
+            total: totalBytesExpectedToSend
+        ))
     }
 }
