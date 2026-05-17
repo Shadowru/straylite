@@ -25,9 +25,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     // Live overlay signals — updated continuously while scanning.
     @Published private(set) var liveRoom: CapturedRoom?                  // every ~150ms
-    @Published private(set) var cameraTransform: simd_float4x4 = matrix_identity_float4x4
-    @Published private(set) var cameraIntrinsics: simd_float3x3 = matrix_identity_float3x3
-    @Published private(set) var imageResolution: CGSize = .zero
+    @Published private(set) var latestCamera: ARCamera?                  // for projectPoint()
     @Published private(set) var coachingInstruction: String?
     @Published private(set) var lastDetectionAt: Date?                   // for "X seconds since new"
     @Published private(set) var blurScore: Double = 1.0                  // 0 = blurry, 1 = sharp
@@ -76,7 +74,13 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             state = .failed(reason: "ARKit / sceneDepth not supported on this device.")
             return
         }
-        config.frameSemantics.insert(.sceneDepth)
+        // RoomCaptureSession piggybacks on this same ARSession and prefers the
+        // smoothed depth stream; request both so frame.sceneDepth is populated.
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            config.frameSemantics.insert(.smoothedSceneDepth)
+        } else {
+            config.frameSemantics.insert(.sceneDepth)
+        }
         config.planeDetection = [.horizontal, .vertical]
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
             config.sceneReconstruction = .mesh
@@ -250,18 +254,17 @@ extension CaptureCoordinator: RoomCaptureSessionDelegate {
 extension CaptureCoordinator: ARSessionDelegate {
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let pixelBuffer = frame.capturedImage
-        let xform = frame.camera.transform
-        let intr = frame.camera.intrinsics
-        let imgRes = frame.camera.imageResolution
-        let depthMap = frame.sceneDepth?.depthMap
-        let confMap = frame.sceneDepth?.confidenceMap
+        let camera = frame.camera
+        // Prefer smoothed depth (what RoomCaptureSession enables); fall back
+        // to non-smoothed if only that's available.
+        let sd = frame.smoothedSceneDepth ?? frame.sceneDepth
+        let depthMap = sd?.depthMap
+        let confMap = sd?.confidenceMap
 
         Task { @MainActor [weak self] in
             guard let self else { return }
             // Live AR signals that drive minimap + wireframe overlay.
-            self.cameraTransform = xform
-            self.cameraIntrinsics = intr
-            self.imageResolution = imgRes
+            self.latestCamera = camera
             self.hasSceneDepth = (depthMap != nil)
 
             // Render at ~30 fps: every 2nd frame, off the main thread, with

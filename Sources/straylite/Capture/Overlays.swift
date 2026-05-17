@@ -1,5 +1,6 @@
 import SwiftUI
 import simd
+import ARKit
 import RoomPlan
 
 // MARK: - Live counter HUD
@@ -87,8 +88,12 @@ struct CoachingBanner: View {
 /// camera = triangle pointing at heading.
 struct MinimapView: View {
     let room: CapturedRoom?
-    let cameraTransform: simd_float4x4
+    let camera: ARCamera?
     let size: CGFloat = 100
+
+    private var cameraTransform: simd_float4x4 {
+        camera?.transform ?? matrix_identity_float4x4
+    }
 
     var body: some View {
         Canvas { ctx, canvasSize in
@@ -202,38 +207,22 @@ struct MinimapView: View {
 /// current camera view and draws a wireframe. Colour by confidence.
 struct ObjectWireframeOverlay: View {
     let room: CapturedRoom?
-    let cameraTransform: simd_float4x4
-    let imageResolution: CGSize
-    let intrinsics: simd_float3x3
+    let camera: ARCamera?
     let viewSize: CGSize
 
     var body: some View {
         Canvas { ctx, _ in
-            guard let r = room, viewSize.width > 0, viewSize.height > 0,
-                  imageResolution.width > 0 else { return }
+            guard let r = room, let cam = camera,
+                  viewSize.width > 0, viewSize.height > 0 else { return }
 
-            let viewToCam = cameraTransform.inverse
-            // Camera intrinsics give projection from camera frame to image
-            // pixels in landscape-right orientation. We'll project to image
-            // coords then map to view coords (rotated to portrait).
-
+            // Apple-supplied projection: handles orientation, fov, distortion.
+            // Returns CGPoint(NaN, NaN) for points outside the visible frustum.
             func project(_ world: simd_float3) -> CGPoint? {
-                let wh = simd_float4(world.x, world.y, world.z, 1)
-                let cam4 = viewToCam * wh
-                let cam = simd_float3(cam4.x, cam4.y, cam4.z)
-                // Camera looks down -Z; reject points behind/at-plane
-                if cam.z >= -0.05 { return nil }
-                let projected = intrinsics * simd_float3(cam.x / -cam.z,
-                                                          cam.y / -cam.z,
-                                                          1)
-                let ix = CGFloat(projected.x)  // 0..imageW
-                let iy = CGFloat(projected.y)  // 0..imageH
-                // Map image landscape-right → portrait view:
-                //   view.x = iy / imageH * viewW
-                //   view.y = (1 - ix/imageW) * viewH
-                let vx = (iy / imageResolution.height) * viewSize.width
-                let vy = (1 - ix / imageResolution.width) * viewSize.height
-                return CGPoint(x: vx, y: vy)
+                let p = cam.projectPoint(world,
+                                         orientation: .portrait,
+                                         viewportSize: viewSize)
+                if p.x.isNaN || p.y.isNaN { return nil }
+                return p
             }
 
             for o in r.objects {
@@ -242,9 +231,8 @@ struct ObjectWireframeOverlay: View {
                         ctx: ctx, project: project)
             }
             for w in r.walls {
-                // Walls have depth 0 — draw as a thick polygon
                 drawBox(w.transform, w.dimensions,
-                        color: .green.opacity(0.4),
+                        color: .green.opacity(0.45),
                         ctx: ctx, project: project)
             }
             for d in r.doors {

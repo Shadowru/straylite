@@ -1,33 +1,38 @@
 import SwiftUI
 
-/// Live capture screen: AR feed + a stack of diagnostic overlays.
+/// Live capture screen. Layout (bottom-to-top after live preview):
+///   - background    full-screen camera feed
+///   - overlay       3D wireframes projected from RoomPlan
+///   - top           close (left) + counter + minimap (right)
+///   - center        coaching banner
+///   - bottom-left   quality HUD
+///   - bottom-right  status pill
+///   - bottom        time + record button (centred horizontally)
 struct CaptureView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: SessionsStore
     @StateObject private var coordinator = CaptureCoordinator()
     @State private var now = Date()
 
-    // Driver for the "X seconds since detection" badge — refreshes 4×/sec.
     private let clock = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
+                // ── live camera feed
                 ARViewContainer(coordinator: coordinator)
                     .ignoresSafeArea()
 
-                // 3D wireframe of detected objects, projected onto the camera feed.
+                // ── 3D wireframes over the feed
                 ObjectWireframeOverlay(
                     room: coordinator.liveRoom,
-                    cameraTransform: coordinator.cameraTransform,
-                    imageResolution: coordinator.imageResolution,
-                    intrinsics: coordinator.cameraIntrinsics,
+                    camera: coordinator.latestCamera,
                     viewSize: geo.size
                 )
                 .ignoresSafeArea()
 
-                VStack {
-                    // ─── Top row ─────────────────────────────────────
+                // ── HUD (in safe area so the close button isn't under the notch)
+                VStack(spacing: 0) {
                     HStack(alignment: .top) {
                         Button {
                             coordinator.stop()
@@ -41,22 +46,21 @@ struct CaptureView: View {
                         VStack(alignment: .trailing, spacing: 8) {
                             LiveCounterView(room: coordinator.liveRoom)
                             MinimapView(room: coordinator.liveRoom,
-                                        cameraTransform: coordinator.cameraTransform)
+                                        camera: coordinator.latestCamera)
                         }
                     }
-                    .padding()
+                    .padding(.horizontal)
+                    .padding(.top, 8)
 
-                    // ─── Coaching banner (centered, just below counter) ───
                     CoachingBanner(
                         instruction: coordinator.coachingInstruction,
                         lastDetectionAt: coordinator.lastDetectionAt,
                         now: now
                     )
-                    .padding(.top, -4)
+                    .padding(.top, 8)
 
                     Spacer()
 
-                    // ─── Bottom row: quality HUD left, status pill right ──
                     HStack(alignment: .bottom) {
                         QualityHUD(
                             blurScore: coordinator.blurScore,
@@ -73,25 +77,24 @@ struct CaptureView: View {
                     }
                     .padding(.horizontal)
 
-                    // ─── Record control ─────────────────────────────
-                    VStack(spacing: 12) {
+                    // Record group, centered horizontally regardless of HUD widths
+                    VStack(spacing: 10) {
                         Text(timeLabel)
                             .font(.system(.title2, design: .monospaced))
                             .foregroundStyle(.white)
                         RecordButton(isRecording: coordinator.state == .running) {
                             switch coordinator.state {
-                            case .idle:
-                                coordinator.start()
-                            case .running:
-                                coordinator.stop()
-                            case .finalising, .finished, .failed:
-                                break
+                            case .idle:     coordinator.start()
+                            case .running:  coordinator.stop()
+                            case .finalising, .finished, .failed: break
                             }
                         }
                     }
-                    .padding(.top, 8)
-                    .padding(.bottom, 32)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, 12)
+                    .padding(.bottom, 24)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear {
