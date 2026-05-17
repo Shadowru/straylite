@@ -31,12 +31,18 @@ struct SettingsView: View {
                     } label: {
                         HStack {
                             if probing {
-                                ProgressView().controlSize(.small)
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(.white)
                             }
                             Text(probing ? "Checking…" : "Check connection")
+                                .frame(maxWidth: .infinity)
                         }
                     }
-                    .disabled(probing || serverURL.isEmpty)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(probing)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16,
+                                              bottom: 6, trailing: 16))
                     if let r = probeResult {
                         Text(r)
                             .font(.caption)
@@ -74,8 +80,15 @@ struct SettingsView: View {
     }
 
     private func probe() {
-        guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespaces)) else {
-            probeResult = "Bad URL"
+        let trimmed = serverURL.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            probeResult = "Enter the server URL first."
+            probeOK = false
+            return
+        }
+        let normalised = trimmed.hasPrefix("http") ? trimmed : "https://" + trimmed
+        guard let url = URL(string: normalised) else {
+            probeResult = "Bad URL: \(normalised)"
             probeOK = false
             return
         }
