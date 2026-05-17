@@ -1,65 +1,107 @@
 import SwiftUI
 
-/// Live capture screen: ARView fills the screen, overlay shows a record
-/// button, timer, and status.
+/// Live capture screen: AR feed + a stack of diagnostic overlays.
 struct CaptureView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: SessionsStore
     @StateObject private var coordinator = CaptureCoordinator()
+    @State private var now = Date()
+
+    // Driver for the "X seconds since detection" badge — refreshes 4×/sec.
+    private let clock = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        ZStack {
-            ARViewContainer(coordinator: coordinator)
+        GeometryReader { geo in
+            ZStack {
+                ARViewContainer(coordinator: coordinator)
+                    .ignoresSafeArea()
+
+                // 3D wireframe of detected objects, projected onto the camera feed.
+                ObjectWireframeOverlay(
+                    room: coordinator.liveRoom,
+                    cameraTransform: coordinator.cameraTransform,
+                    imageResolution: coordinator.imageResolution,
+                    intrinsics: coordinator.cameraIntrinsics,
+                    viewSize: geo.size
+                )
                 .ignoresSafeArea()
 
-            VStack {
-                // Top: dismiss + status text
-                HStack(alignment: .top) {
-                    Button {
-                        coordinator.stop()
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title)
-                            .foregroundStyle(.white.opacity(0.85))
-                    }
-                    Spacer()
-                    Text(statusLabel)
-                        .font(.callout)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.55), in: Capsule())
-                }
-                .padding()
-
-                Spacer()
-
-                // Bottom: timer + record button
-                VStack(spacing: 12) {
-                    Text(timeLabel)
-                        .font(.system(.title2, design: .monospaced))
-                        .foregroundStyle(.white)
-                    RecordButton(isRecording: coordinator.state == .running) {
-                        switch coordinator.state {
-                        case .idle:
-                            coordinator.start()
-                        case .running:
+                VStack {
+                    // ─── Top row ─────────────────────────────────────
+                    HStack(alignment: .top) {
+                        Button {
                             coordinator.stop()
-                        case .finalising, .finished, .failed:
-                            break
+                            dismiss()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title)
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 8) {
+                            LiveCounterView(room: coordinator.liveRoom)
+                            MinimapView(room: coordinator.liveRoom,
+                                        cameraTransform: coordinator.cameraTransform)
                         }
                     }
+                    .padding()
+
+                    // ─── Coaching banner (centered, just below counter) ───
+                    CoachingBanner(
+                        instruction: coordinator.coachingInstruction,
+                        lastDetectionAt: coordinator.lastDetectionAt,
+                        now: now
+                    )
+                    .padding(.top, -4)
+
+                    Spacer()
+
+                    // ─── Bottom row: quality HUD left, status pill right ──
+                    HStack(alignment: .bottom) {
+                        QualityHUD(
+                            blurScore: coordinator.blurScore,
+                            depthCoverage: coordinator.depthCoverage,
+                            hasSceneDepth: coordinator.hasSceneDepth
+                        )
+                        Spacer()
+                        Text(statusLabel)
+                            .font(.callout)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.black.opacity(0.55), in: Capsule())
+                    }
+                    .padding(.horizontal)
+
+                    // ─── Record control ─────────────────────────────
+                    VStack(spacing: 12) {
+                        Text(timeLabel)
+                            .font(.system(.title2, design: .monospaced))
+                            .foregroundStyle(.white)
+                        RecordButton(isRecording: coordinator.state == .running) {
+                            switch coordinator.state {
+                            case .idle:
+                                coordinator.start()
+                            case .running:
+                                coordinator.stop()
+                            case .finalising, .finished, .failed:
+                                break
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                    .padding(.bottom, 32)
                 }
-                .padding(.bottom, 32)
             }
         }
         .onAppear {
             coordinator.store = store
         }
+        .onReceive(clock) { date in
+            now = date
+        }
         .onChange(of: coordinator.state) { _, new in
             if case .finished = new {
-                // Auto-dismiss after a short delay; future: navigate to detail
                 Task {
                     try? await Task.sleep(for: .seconds(1.2))
                     dismiss()

@@ -23,6 +23,20 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     @Published private(set) var datasetURL: URL?
     @Published private(set) var previewImage: UIImage?
 
+    // Live overlay signals — updated continuously while scanning.
+    @Published private(set) var liveRoom: CapturedRoom?                  // every ~150ms
+    @Published private(set) var cameraTransform: simd_float4x4 = matrix_identity_float4x4
+    @Published private(set) var cameraIntrinsics: simd_float3x3 = matrix_identity_float3x3
+    @Published private(set) var imageResolution: CGSize = .zero
+    @Published private(set) var coachingInstruction: String?
+    @Published private(set) var lastDetectionAt: Date?                   // for "X seconds since new"
+    @Published private(set) var blurScore: Double = 1.0                  // 0 = blurry, 1 = sharp
+    @Published private(set) var depthCoverage: Double = 0.0              // 0..1 fraction of valid LiDAR pixels
+    @Published private(set) var hasSceneDepth: Bool = false
+
+    private var lastCounts: (Int, Int, Int, Int) = (0, 0, 0, 0)
+    private let haptic = UIImpactFeedbackGenerator(style: .light)
+
     // CIContext is documented as thread-safe; declared nonisolated so the
     // off-main rendering closure can use it without an actor hop.
     nonisolated private let previewContext = CIContext(options: [.useSoftwareRenderer: false])
@@ -177,6 +191,58 @@ extension CaptureCoordinator: RoomCaptureSessionDelegate {
             }
         }
     }
+
+    // Incremental updates: fires every ~150 ms with the current room snapshot.
+    nonisolated func captureSession(_ session: RoomCaptureSession,
+                                    didUpdate room: CapturedRoom) {
+        Task { @MainActor in self.applyLive(room: room) }
+    }
+
+    nonisolated func captureSession(_ session: RoomCaptureSession,
+                                    didAdd room: CapturedRoom) {
+        Task { @MainActor in self.applyLive(room: room) }
+    }
+
+    nonisolated func captureSession(_ session: RoomCaptureSession,
+                                    didChange room: CapturedRoom) {
+        Task { @MainActor in self.applyLive(room: room) }
+    }
+
+    nonisolated func captureSession(_ session: RoomCaptureSession,
+                                    didRemove room: CapturedRoom) {
+        Task { @MainActor in self.applyLive(room: room) }
+    }
+
+    // Apple-generated coaching string: "Move closer", "Hold still", etc.
+    nonisolated func captureSession(_ session: RoomCaptureSession,
+                                    didProvide instruction: RoomCaptureSession.Instruction) {
+        let text: String
+        switch instruction {
+        case .moveCloseToWall:    text = "Move closer to the wall"
+        case .moveAwayFromWall:   text = "Move away from the wall"
+        case .slowDown:           text = "Slow down"
+        case .turnOnLight:        text = "Turn on the light"
+        case .normal:             text = ""
+        case .lowTexture:         text = "Low texture — face a textured surface"
+        @unknown default:         text = "\(instruction)"
+        }
+        Task { @MainActor in
+            self.coachingInstruction = text.isEmpty ? nil : text
+        }
+    }
+
+    private func applyLive(room: CapturedRoom) {
+        self.liveRoom = room
+        let counts = (room.walls.count, room.doors.count,
+                      room.windows.count, room.objects.count)
+        let total = counts.0 + counts.1 + counts.2 + counts.3
+        let prevTotal = lastCounts.0 + lastCounts.1 + lastCounts.2 + lastCounts.3
+        if total > prevTotal {
+            lastDetectionAt = Date()
+            haptic.impactOccurred()
+        }
+        lastCounts = counts
+    }
 }
 
 // MARK: - ARSessionDelegate
@@ -184,8 +250,20 @@ extension CaptureCoordinator: RoomCaptureSessionDelegate {
 extension CaptureCoordinator: ARSessionDelegate {
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let pixelBuffer = frame.capturedImage
+        let xform = frame.camera.transform
+        let intr = frame.camera.intrinsics
+        let imgRes = frame.camera.imageResolution
+        let depthMap = frame.sceneDepth?.depthMap
+        let confMap = frame.sceneDepth?.confidenceMap
+
         Task { @MainActor [weak self] in
             guard let self else { return }
+            // Live AR signals that drive minimap + wireframe overlay.
+            self.cameraTransform = xform
+            self.cameraIntrinsics = intr
+            self.imageResolution = imgRes
+            self.hasSceneDepth = (depthMap != nil)
+
             // Render at ~30 fps: every 2nd frame, off the main thread, with
             // a single-flight gate so back-pressure doesn't queue up.
             self.previewThrottle += 1
@@ -193,12 +271,90 @@ extension CaptureCoordinator: ARSessionDelegate {
                 self.previewInFlight = true
                 self.renderPreview(from: pixelBuffer)
             }
+            // Compute blur + depth coverage every 6th frame (~10 Hz)
+            if self.previewThrottle % 6 == 0 {
+                self.updateQuality(from: pixelBuffer,
+                                    depth: depthMap,
+                                    confidence: confMap)
+            }
             guard self.state == .running else { return }
             self.inboundFrameCount += 1
             if self.inboundFrameCount % self.frameStride != 0 { return }
             self.rgbEncoder?.add(frame: frame)
             self.depthEncoder?.add(frame: frame)
             self.odometryEncoder?.add(frame: frame)
+        }
+    }
+
+    /// Compute a 0..1 blur score (1 = sharp) via gradient stddev on a tiny
+    /// 64×64 luma downsample, plus a 0..1 depth-coverage fraction from the
+    /// confidence map.
+    private func updateQuality(from buffer: CVPixelBuffer,
+                                depth: CVPixelBuffer?,
+                                confidence: CVPixelBuffer?) {
+        // Run on the preview queue to avoid jamming main.
+        previewQueue.async { [weak self] in
+            guard let self else { return }
+            let base = CIImage(cvPixelBuffer: buffer).applyingFilter("CIPhotoEffectMono")
+            let inputScale = 64.0 / max(base.extent.width, 1)
+            let ci = base.applyingFilter("CILanczosScaleTransform",
+                                          parameters: ["inputScale": inputScale])
+            let arr = NSMutableData(length: 64 * 64 * 4)!
+            self.previewContext.render(
+                ci,
+                toBitmap: arr.mutableBytes,
+                rowBytes: 64 * 4,
+                bounds: CGRect(x: 0, y: 0, width: 64, height: 64),
+                format: .RGBA8,
+                colorSpace: CGColorSpaceCreateDeviceRGB()
+            )
+            let ptr = arr.bytes.bindMemory(to: UInt8.self, capacity: 64 * 64 * 4)
+            // Sobel-x abs as a quick sharpness proxy
+            var acc: Double = 0
+            var sq: Double = 0
+            var n: Double = 0
+            for y in 1..<63 {
+                for x in 1..<63 {
+                    let lx = Int(ptr[(y * 64 + x - 1) * 4])
+                    let rx = Int(ptr[(y * 64 + x + 1) * 4])
+                    let g = abs(rx - lx)
+                    acc += Double(g)
+                    sq += Double(g * g)
+                    n += 1
+                }
+            }
+            let mean = acc / max(n, 1)
+            let variance = max(0, sq / max(n, 1) - mean * mean)
+            // Empirically: variance ≥ 250 = sharp, ≤ 30 = blurry
+            let sharp = min(1.0, max(0.0, (variance - 30) / 220))
+
+            // Depth coverage: fraction of pixels with confidence > low
+            var coverage = 0.0
+            if let confidence {
+                CVPixelBufferLockBaseAddress(confidence, .readOnly)
+                defer { CVPixelBufferUnlockBaseAddress(confidence, .readOnly) }
+                let w = CVPixelBufferGetWidth(confidence)
+                let h = CVPixelBufferGetHeight(confidence)
+                let stride = CVPixelBufferGetBytesPerRow(confidence)
+                if let base = CVPixelBufferGetBaseAddress(confidence) {
+                    let bytes = base.assumingMemoryBound(to: UInt8.self)
+                    var ok = 0, total = 0
+                    for y in 0..<h {
+                        for x in 0..<w {
+                            if bytes[y * stride + x] >= 1 { ok += 1 }
+                            total += 1
+                        }
+                    }
+                    coverage = total > 0 ? Double(ok) / Double(total) : 0
+                }
+            } else if depth == nil {
+                coverage = 0
+            }
+
+            DispatchQueue.main.async {
+                self.blurScore = sharp
+                self.depthCoverage = coverage
+            }
         }
     }
 
