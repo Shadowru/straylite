@@ -1,8 +1,11 @@
 import SwiftUI
 
-/// Live capture screen with HUD pieces attached via independent .overlay
-/// calls. No nested VStack/HStack chains so a state change in one block
-/// cannot push another block around.
+/// Two-layer composition:
+///   * HUD layer  — a VStack/HStack respecting the safe area, this is the
+///                  primary content driving the layout pass.
+///   * Background — camera feed + wireframe overlay, fed via .background()
+///                  so its image intrinsic sizes can't propagate up the
+///                  layout tree and shove HUD pieces around.
 struct CaptureView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: SessionsStore
@@ -12,19 +15,9 @@ struct CaptureView: View {
     private let clock = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                ARViewContainer(coordinator: coordinator)
-                    .ignoresSafeArea()
-                ObjectWireframeOverlay(
-                    room: coordinator.liveRoom,
-                    camera: coordinator.latestCamera,
-                    viewSize: geo.size
-                )
-                .ignoresSafeArea()
-            }
-            // ── Top-left: close
-            .overlay(alignment: .topLeading) {
+        VStack(spacing: 0) {
+            // ── Top row: close (left) + spacer + HUD column (right) ──
+            HStack(alignment: .top) {
                 Button {
                     coordinator.stop()
                     dismiss()
@@ -33,11 +26,7 @@ struct CaptureView: View {
                         .font(.title)
                         .foregroundStyle(.white.opacity(0.85))
                 }
-                .padding(.leading, 12)
-                .padding(.top, 8)
-            }
-            // ── Top-right: HUD column
-            .overlay(alignment: .topTrailing) {
+                Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 6) {
                     LiveCounterView(room: coordinator.liveRoom)
                     QualityHUD(
@@ -48,40 +37,54 @@ struct CaptureView: View {
                     MinimapView(room: coordinator.liveRoom,
                                 camera: coordinator.latestCamera)
                 }
-                .padding(.trailing, 12)
-                .padding(.top, 8)
+                .fixedSize(horizontal: true, vertical: true)
             }
-            // ── Top-center, just below HUD: coaching banner
-            .overlay(alignment: .top) {
-                CoachingBanner(
-                    instruction: coordinator.coachingInstruction,
-                    lastDetectionAt: coordinator.lastDetectionAt,
-                    now: now
-                )
-                .padding(.top, 220)
-            }
-            // ── Bottom-center: status + time + record
-            .overlay(alignment: .bottom) {
-                VStack(spacing: 8) {
-                    Text(statusLabel)
-                        .font(.callout)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.55), in: Capsule())
-                    Text(timeLabel)
-                        .font(.system(.title3, design: .monospaced))
-                        .foregroundStyle(.white)
-                    RecordButton(isRecording: coordinator.state == .running) {
-                        switch coordinator.state {
-                        case .idle:     coordinator.start()
-                        case .running:  coordinator.stop()
-                        case .finalising, .finished, .failed: break
-                        }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+
+            CoachingBanner(
+                instruction: coordinator.coachingInstruction,
+                lastDetectionAt: coordinator.lastDetectionAt,
+                now: now
+            )
+            .padding(.top, 6)
+
+            Spacer(minLength: 0)
+
+            // ── Bottom: status + time + record (centred horizontally) ──
+            VStack(spacing: 8) {
+                Text(statusLabel)
+                    .font(.callout)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.55), in: Capsule())
+                Text(timeLabel)
+                    .font(.system(.title3, design: .monospaced))
+                    .foregroundStyle(.white)
+                RecordButton(isRecording: coordinator.state == .running) {
+                    switch coordinator.state {
+                    case .idle:     coordinator.start()
+                    case .running:  coordinator.stop()
+                    case .finalising, .finished, .failed: break
                     }
                 }
-                .padding(.bottom, 24)
             }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.bottom, 24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Camera + wireframes go BEHIND the HUD via background. Their image
+        // intrinsic dimensions don't escape into the HUD layout pass.
+        .background {
+            ZStack {
+                ARViewContainer(coordinator: coordinator)
+                ObjectWireframeOverlay(
+                    room: coordinator.liveRoom,
+                    camera: coordinator.latestCamera
+                )
+            }
+            .ignoresSafeArea()
         }
         .onAppear { coordinator.store = store }
         .onReceive(clock) { date in now = date }

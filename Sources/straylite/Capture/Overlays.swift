@@ -212,12 +212,13 @@ struct MinimapView: View {
 struct ObjectWireframeOverlay: View {
     let room: CapturedRoom?
     let camera: ARCamera?
-    let viewSize: CGSize
 
     var body: some View {
-        Canvas { ctx, _ in
-            guard let r = room, let cam = camera,
-                  viewSize.width > 0, viewSize.height > 0 else { return }
+        GeometryReader { geo in
+            let viewSize = geo.size
+            Canvas { ctx, _ in
+                guard let r = room, let cam = camera,
+                      viewSize.width > 0, viewSize.height > 0 else { return }
 
             // Reasonable bounding box for valid projections; reject points
             // that fall absurdly far outside the view (caused by transient
@@ -253,7 +254,8 @@ struct ObjectWireframeOverlay: View {
                 drawBox(w.transform, w.dimensions, color: .cyan,
                         ctx: ctx, project: project)
             }
-        }
+            }  // end inner Canvas closure
+        }      // end GeometryReader
         .allowsHitTesting(false)
     }
 
