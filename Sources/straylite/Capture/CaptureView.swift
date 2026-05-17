@@ -1,13 +1,8 @@
 import SwiftUI
 
-/// Live capture screen. Layout (bottom-to-top after live preview):
-///   - background    full-screen camera feed
-///   - overlay       3D wireframes projected from RoomPlan
-///   - top           close (left) + counter + minimap (right)
-///   - center        coaching banner
-///   - bottom-left   quality HUD
-///   - bottom-right  status pill
-///   - bottom        time + record button (centred horizontally)
+/// Live capture screen with the diagnostics consolidated into a single
+/// compact top-right column, leaving the bottom for the timer + record
+/// button. This avoids the bottom-edge overflow seen on smaller phones.
 struct CaptureView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: SessionsStore
@@ -19,11 +14,8 @@ struct CaptureView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                // ── live camera feed
                 ARViewContainer(coordinator: coordinator)
                     .ignoresSafeArea()
-
-                // ── 3D wireframes over the feed
                 ObjectWireframeOverlay(
                     room: coordinator.liveRoom,
                     camera: coordinator.latestCamera,
@@ -31,8 +23,8 @@ struct CaptureView: View {
                 )
                 .ignoresSafeArea()
 
-                // ── HUD (in safe area so the close button isn't under the notch)
                 VStack(spacing: 0) {
+                    // ── Top row: close (left) | HUD column (right) ──
                     HStack(alignment: .top) {
                         Button {
                             coordinator.stop()
@@ -43,45 +35,40 @@ struct CaptureView: View {
                                 .foregroundStyle(.white.opacity(0.85))
                         }
                         Spacer()
-                        VStack(alignment: .trailing, spacing: 8) {
+                        VStack(alignment: .trailing, spacing: 6) {
                             LiveCounterView(room: coordinator.liveRoom)
+                            QualityHUD(
+                                blurScore: coordinator.blurScore,
+                                depthCoverage: coordinator.depthCoverage,
+                                hasSceneDepth: coordinator.hasSceneDepth
+                            )
                             MinimapView(room: coordinator.liveRoom,
                                         camera: coordinator.latestCamera)
                         }
                     }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 6)
 
+                    // Coaching banner on its own row, centred.
                     CoachingBanner(
                         instruction: coordinator.coachingInstruction,
                         lastDetectionAt: coordinator.lastDetectionAt,
                         now: now
                     )
-                    .padding(.top, 8)
+                    .padding(.top, 6)
 
-                    Spacer()
+                    Spacer(minLength: 0)
 
-                    HStack(alignment: .bottom) {
-                        QualityHUD(
-                            blurScore: coordinator.blurScore,
-                            depthCoverage: coordinator.depthCoverage,
-                            hasSceneDepth: coordinator.hasSceneDepth,
-                            depthDiag: coordinator.depthDiag
-                        )
-                        Spacer()
+                    // ── Bottom: status pill + time + record ──
+                    VStack(spacing: 8) {
                         Text(statusLabel)
                             .font(.callout)
                             .foregroundStyle(.white)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                             .background(.black.opacity(0.55), in: Capsule())
-                    }
-                    .padding(.horizontal)
-
-                    // Record group, centered horizontally regardless of HUD widths
-                    VStack(spacing: 10) {
                         Text(timeLabel)
-                            .font(.system(.title2, design: .monospaced))
+                            .font(.system(.title3, design: .monospaced))
                             .foregroundStyle(.white)
                         RecordButton(isRecording: coordinator.state == .running) {
                             switch coordinator.state {
@@ -92,18 +79,13 @@ struct CaptureView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.top, 12)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 16)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onAppear {
-            coordinator.store = store
-        }
-        .onReceive(clock) { date in
-            now = date
-        }
+        .onAppear { coordinator.store = store }
+        .onReceive(clock) { date in now = date }
         .onChange(of: coordinator.state) { _, new in
             if case .finished = new {
                 Task {
@@ -139,11 +121,11 @@ private struct RecordButton: View {
             ZStack {
                 Circle()
                     .stroke(.white, lineWidth: 4)
-                    .frame(width: 72, height: 72)
-                RoundedRectangle(cornerRadius: isRecording ? 6 : 36)
+                    .frame(width: 64, height: 64)
+                RoundedRectangle(cornerRadius: isRecording ? 6 : 32)
                     .fill(.red)
-                    .frame(width: isRecording ? 32 : 60,
-                           height: isRecording ? 32 : 60)
+                    .frame(width: isRecording ? 28 : 52,
+                           height: isRecording ? 28 : 52)
                     .animation(.spring(duration: 0.25), value: isRecording)
             }
         }

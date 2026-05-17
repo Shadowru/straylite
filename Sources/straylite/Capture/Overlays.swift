@@ -15,26 +15,26 @@ struct LiveCounterView: View {
         let win = room?.windows.count ?? 0
         let obj = room?.objects.count ?? 0
 
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 1) {
             row("Walls",   w,   "square.split.bottomrightquarter")
             row("Doors",   d,   "door.left.hand.open")
             row("Windows", win, "window.vertical.open")
             row("Objects", obj, "cube")
         }
-        .font(.system(size: 12, design: .rounded).monospacedDigit())
+        .font(.system(size: 10, design: .rounded).monospacedDigit())
         .foregroundStyle(.white)
-        .padding(8)
-        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+        .padding(6)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
     }
 
     private func row(_ label: String, _ n: Int, _ icon: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon).frame(width: 14)
+        HStack(spacing: 3) {
+            Image(systemName: icon).frame(width: 12)
             Text("\(label)")
-            Spacer(minLength: 6)
+            Spacer(minLength: 4)
             Text("\(n)").bold().foregroundStyle(n > 0 ? .green : .white.opacity(0.8))
         }
-        .frame(width: 110, alignment: .leading)
+        .frame(width: 96, alignment: .leading)
     }
 }
 
@@ -89,7 +89,7 @@ struct CoachingBanner: View {
 struct MinimapView: View {
     let room: CapturedRoom?
     let camera: ARCamera?
-    let size: CGFloat = 100
+    var size: CGFloat = 80
 
     private var cameraTransform: simd_float4x4 {
         camera?.transform ?? matrix_identity_float4x4
@@ -294,33 +294,27 @@ struct QualityHUD: View {
     let blurScore: Double           // 0..1
     let depthCoverage: Double       // 0..1
     let hasSceneDepth: Bool
-    let depthDiag: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            qualityRow(label: "Sharpness", value: blurScore,
+            qualityRow(label: "Sharp", value: blurScore,
                        icon: "camera.metering.spot")
-            qualityRow(label: "Depth",
-                       value: hasSceneDepth ? depthCoverage : 0,
-                       icon: hasSceneDepth ? "cube.transparent" : "exclamationmark.triangle")
-            if !depthDiag.isEmpty {
-                Text(depthDiag)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(hasSceneDepth ? .green : .orange)
+            if hasSceneDepth {
+                qualityRow(label: "Depth", value: depthCoverage,
+                           icon: "cube.transparent")
             }
         }
-        .font(.system(size: 11, design: .rounded).monospacedDigit())
+        .font(.system(size: 10, design: .rounded).monospacedDigit())
         .foregroundStyle(.white)
-        .padding(8)
-        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+        .padding(6)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
     }
 
     private func qualityRow(label: String, value: Double, icon: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon).frame(width: 14)
+        HStack(spacing: 4) {
+            Image(systemName: icon).frame(width: 12)
             Text(label)
-            Spacer(minLength: 4)
-            // Tiny bar
+            Spacer(minLength: 2)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(.white.opacity(0.2))
@@ -328,9 +322,9 @@ struct QualityHUD: View {
                         .frame(width: max(2, geo.size.width * CGFloat(value)))
                 }
             }
-            .frame(width: 56, height: 5)
+            .frame(width: 40, height: 4)
         }
-        .frame(width: 130, alignment: .leading)
+        .frame(width: 100, alignment: .leading)
     }
 
     private func barColor(_ v: Double) -> Color {
