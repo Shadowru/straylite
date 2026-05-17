@@ -27,7 +27,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .sheet(isPresented: $presentingCapture) {
+                .fullScreenCover(isPresented: $presentingCapture) {
                     CaptureView()
                 }
                 .sheet(isPresented: $presentingSettings) {

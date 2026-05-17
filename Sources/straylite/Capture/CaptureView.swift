@@ -65,7 +65,8 @@ struct CaptureView: View {
                         QualityHUD(
                             blurScore: coordinator.blurScore,
                             depthCoverage: coordinator.depthCoverage,
-                            hasSceneDepth: coordinator.hasSceneDepth
+                            hasSceneDepth: coordinator.hasSceneDepth,
+                            depthDiag: coordinator.depthDiag
                         )
                         Spacer()
                         Text(statusLabel)

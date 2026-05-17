@@ -31,6 +31,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     @Published private(set) var blurScore: Double = 1.0                  // 0 = blurry, 1 = sharp
     @Published private(set) var depthCoverage: Double = 0.0              // 0..1 fraction of valid LiDAR pixels
     @Published private(set) var hasSceneDepth: Bool = false
+    @Published private(set) var depthDiag: String = ""                   // why depth is missing
 
     private var lastCounts: (Int, Int, Int, Int) = (0, 0, 0, 0)
     private let haptic = UIImpactFeedbackGenerator(style: .light)
@@ -74,11 +75,14 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             state = .failed(reason: "ARKit / sceneDepth not supported on this device.")
             return
         }
-        // RoomCaptureSession piggybacks on this same ARSession and prefers the
-        // smoothed depth stream; request both so frame.sceneDepth is populated.
+        // Request BOTH depth variants; ARFrame exposes whichever fires.
+        // RoomCaptureSession may run its own .run(config) internally and
+        // drop semantics it doesn't know about, so we re-apply ours after
+        // room capture has started (see end of this method).
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
             config.frameSemantics.insert(.smoothedSceneDepth)
-        } else {
+        }
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             config.frameSemantics.insert(.sceneDepth)
         }
         config.planeDetection = [.horizontal, .vertical]
@@ -109,6 +113,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             room.delegate = self
             room.run(configuration: .init())
             self.roomCaptureSession = room
+
+            // RoomCaptureSession internally re-runs the ARSession with its
+            // own config and may strip semantics it doesn't request. Re-apply
+            // ours so depth streams are still attached to each ARFrame.
+            session.run(config, options: [.resetSceneReconstruction])
         }
 
         startTime = now
@@ -255,17 +264,23 @@ extension CaptureCoordinator: ARSessionDelegate {
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let pixelBuffer = frame.capturedImage
         let camera = frame.camera
-        // Prefer smoothed depth (what RoomCaptureSession enables); fall back
-        // to non-smoothed if only that's available.
-        let sd = frame.smoothedSceneDepth ?? frame.sceneDepth
+        let smoothed = frame.smoothedSceneDepth
+        let rawDepth = frame.sceneDepth
+        let sd = smoothed ?? rawDepth
         let depthMap = sd?.depthMap
         let confMap = sd?.confidenceMap
 
+        let diag: String
+        if smoothed != nil && rawDepth != nil { diag = "depth: smoothed + raw" }
+        else if smoothed != nil               { diag = "depth: smoothed only" }
+        else if rawDepth != nil               { diag = "depth: raw only" }
+        else                                  { diag = "depth: BOTH nil" }
+
         Task { @MainActor [weak self] in
             guard let self else { return }
-            // Live AR signals that drive minimap + wireframe overlay.
             self.latestCamera = camera
             self.hasSceneDepth = (depthMap != nil)
+            self.depthDiag = diag
 
             // Render at ~30 fps: every 2nd frame, off the main thread, with
             // a single-flight gate so back-pressure doesn't queue up.

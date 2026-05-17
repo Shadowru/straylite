@@ -294,6 +294,7 @@ struct QualityHUD: View {
     let blurScore: Double           // 0..1
     let depthCoverage: Double       // 0..1
     let hasSceneDepth: Bool
+    let depthDiag: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -302,10 +303,10 @@ struct QualityHUD: View {
             qualityRow(label: "Depth",
                        value: hasSceneDepth ? depthCoverage : 0,
                        icon: hasSceneDepth ? "cube.transparent" : "exclamationmark.triangle")
-            if !hasSceneDepth {
-                Text("LiDAR depth unavailable")
-                    .font(.caption2)
-                    .foregroundStyle(.red)
+            if !depthDiag.isEmpty {
+                Text(depthDiag)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(hasSceneDepth ? .green : .orange)
             }
         }
         .font(.system(size: 11, design: .rounded).monospacedDigit())
