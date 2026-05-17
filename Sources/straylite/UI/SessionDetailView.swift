@@ -9,6 +9,12 @@ struct SessionDetailView: View {
     @State private var isZipping = false
     @State private var zipError: String?
 
+    // Upload state
+    @State private var isUploading = false
+    @State private var uploadProgress: String?
+    @State private var uploadResultURL: URL?
+    @State private var uploadError: String?
+
     var body: some View {
         Form {
             Section("Metadata") {
@@ -33,7 +39,46 @@ struct SessionDetailView: View {
                     Text("Folder missing").foregroundStyle(.red)
                 }
             }
-            Section {
+            Section("Upload") {
+                let settings = AppSettings.current()
+                if settings.canUpload {
+                    Button {
+                        uploadToServer(settings: settings)
+                    } label: {
+                        HStack {
+                            if isUploading {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .padding(.trailing, 4)
+                                Text(uploadProgress ?? "Working…")
+                            } else {
+                                Label("Upload to backend", systemImage: "icloud.and.arrow.up")
+                            }
+                        }
+                    }
+                    .disabled(session.folderURL == nil || isUploading)
+                    Text("Server: \(settings.serverURL)")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    if let url = uploadResultURL {
+                        Button {
+                            shareURL = url
+                            isSharing = true
+                        } label: {
+                            Label("Share returned .set", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                    if let err = uploadError {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                } else {
+                    Text("Configure server URL + token in Settings to upload directly.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Section("Share") {
                 Button {
                     shareAsZip()
                 } label: {
@@ -60,6 +105,53 @@ struct SessionDetailView: View {
         .sheet(isPresented: $isSharing) {
             if let url = shareURL {
                 ShareSheet(items: [url])
+            }
+        }
+    }
+
+    private func uploadToServer(settings: AppSettings) {
+        guard let folder = session.folderURL,
+              FileManager.default.fileExists(atPath: folder.path) else { return }
+        isUploading = true
+        uploadProgress = "Zipping…"
+        uploadError = nil
+        uploadResultURL = nil
+        let zipName = session.name
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: ":", with: "-")
+        Task.detached {
+            do {
+                let zip = try FolderZipper.zip(folder, named: zipName)
+                await MainActor.run { uploadProgress = "Uploading…" }
+                let service = UploadService()
+                for await event in service.upload(zipURL: zip, settings: settings) {
+                    switch event {
+                    case .uploading:
+                        await MainActor.run { uploadProgress = "Uploading…" }
+                    case .pending:
+                        await MainActor.run { uploadProgress = "Queued on server…" }
+                    case .processing(let message):
+                        await MainActor.run { uploadProgress = message }
+                    case .done(let localURL):
+                        await MainActor.run {
+                            isUploading = false
+                            uploadResultURL = localURL
+                            uploadProgress = nil
+                        }
+                    case .failed(let reason):
+                        await MainActor.run {
+                            isUploading = false
+                            uploadError = reason
+                            uploadProgress = nil
+                        }
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isUploading = false
+                    uploadError = "Zip failed: \(error.localizedDescription)"
+                    uploadProgress = nil
+                }
             }
         }
     }

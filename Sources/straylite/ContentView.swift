@@ -5,12 +5,20 @@ import SwiftUI
 /// - CaptureView      — live scanning screen (modal sheet)
 struct ContentView: View {
     @State private var presentingCapture = false
+    @State private var presentingSettings = false
 
     var body: some View {
         NavigationStack {
             SessionListView()
                 .navigationTitle("StrayLite")
                 .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            presentingSettings = true
+                        } label: {
+                            Label("Settings", systemImage: "gearshape")
+                        }
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         Button {
                             presentingCapture = true
@@ -21,6 +29,9 @@ struct ContentView: View {
                 }
                 .sheet(isPresented: $presentingCapture) {
                     CaptureView()
+                }
+                .sheet(isPresented: $presentingSettings) {
+                    SettingsView()
                 }
         }
     }
