@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Live capture screen with the diagnostics consolidated into a single
-/// compact top-right column, leaving the bottom for the timer + record
-/// button. This avoids the bottom-edge overflow seen on smaller phones.
+/// Live capture screen with HUD pieces attached via independent .overlay
+/// calls. No nested VStack/HStack chains so a state change in one block
+/// cannot push another block around.
 struct CaptureView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: SessionsStore
@@ -22,69 +22,65 @@ struct CaptureView: View {
                     viewSize: geo.size
                 )
                 .ignoresSafeArea()
-
-                VStack(spacing: 0) {
-                    // ── Top row: close (left) | HUD column (right) ──
-                    HStack(alignment: .top) {
-                        Button {
-                            coordinator.stop()
-                            dismiss()
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title)
-                                .foregroundStyle(.white.opacity(0.85))
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 6) {
-                            LiveCounterView(room: coordinator.liveRoom)
-                            QualityHUD(
-                                blurScore: coordinator.blurScore,
-                                depthCoverage: coordinator.depthCoverage,
-                                hasSceneDepth: coordinator.hasSceneDepth
-                            )
-                            MinimapView(room: coordinator.liveRoom,
-                                        camera: coordinator.latestCamera)
-                        }
-                        // Constrain so liveRoom updates can't grow this column
-                        // past the right edge.
-                        .fixedSize(horizontal: true, vertical: true)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 6)
-
-                    // Coaching banner on its own row, centred.
-                    CoachingBanner(
-                        instruction: coordinator.coachingInstruction,
-                        lastDetectionAt: coordinator.lastDetectionAt,
-                        now: now
-                    )
-                    .padding(.top, 6)
-
-                    Spacer(minLength: 0)
-
-                    // ── Bottom: status pill + time + record ──
-                    VStack(spacing: 8) {
-                        Text(statusLabel)
-                            .font(.callout)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(.black.opacity(0.55), in: Capsule())
-                        Text(timeLabel)
-                            .font(.system(.title3, design: .monospaced))
-                            .foregroundStyle(.white)
-                        RecordButton(isRecording: coordinator.state == .running) {
-                            switch coordinator.state {
-                            case .idle:     coordinator.start()
-                            case .running:  coordinator.stop()
-                            case .finalising, .finished, .failed: break
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.bottom, 16)
+            }
+            // ── Top-left: close
+            .overlay(alignment: .topLeading) {
+                Button {
+                    coordinator.stop()
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title)
+                        .foregroundStyle(.white.opacity(0.85))
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.leading, 12)
+                .padding(.top, 8)
+            }
+            // ── Top-right: HUD column
+            .overlay(alignment: .topTrailing) {
+                VStack(alignment: .trailing, spacing: 6) {
+                    LiveCounterView(room: coordinator.liveRoom)
+                    QualityHUD(
+                        blurScore: coordinator.blurScore,
+                        depthCoverage: coordinator.depthCoverage,
+                        hasSceneDepth: coordinator.hasSceneDepth
+                    )
+                    MinimapView(room: coordinator.liveRoom,
+                                camera: coordinator.latestCamera)
+                }
+                .padding(.trailing, 12)
+                .padding(.top, 8)
+            }
+            // ── Top-center, just below HUD: coaching banner
+            .overlay(alignment: .top) {
+                CoachingBanner(
+                    instruction: coordinator.coachingInstruction,
+                    lastDetectionAt: coordinator.lastDetectionAt,
+                    now: now
+                )
+                .padding(.top, 220)
+            }
+            // ── Bottom-center: status + time + record
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 8) {
+                    Text(statusLabel)
+                        .font(.callout)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.55), in: Capsule())
+                    Text(timeLabel)
+                        .font(.system(.title3, design: .monospaced))
+                        .foregroundStyle(.white)
+                    RecordButton(isRecording: coordinator.state == .running) {
+                        switch coordinator.state {
+                        case .idle:     coordinator.start()
+                        case .running:  coordinator.stop()
+                        case .finalising, .finished, .failed: break
+                        }
+                    }
+                }
+                .padding(.bottom, 24)
             }
         }
         .onAppear { coordinator.store = store }
