@@ -9,6 +9,7 @@ enum SettingsKey {
     static let uploadToken = "uploadToken"
     static let useVLM = "useVLM"
     static let vlmFrames = "vlmFrames"
+    static let hapticsEnabled = "hapticsEnabled"
 }
 
 struct AppSettings {
@@ -16,6 +17,7 @@ struct AppSettings {
     let uploadToken: String
     let useVLM: Bool
     let vlmFrames: Int
+    let hapticsEnabled: Bool
 
     static func current() -> AppSettings {
         let d = UserDefaults.standard
@@ -25,7 +27,8 @@ struct AppSettings {
             useVLM:      d.object(forKey: SettingsKey.useVLM) as? Bool ?? true,
             vlmFrames:   max(1, d.integer(forKey: SettingsKey.vlmFrames) == 0
                                 ? 3
-                                : d.integer(forKey: SettingsKey.vlmFrames))
+                                : d.integer(forKey: SettingsKey.vlmFrames)),
+            hapticsEnabled: d.object(forKey: SettingsKey.hapticsEnabled) as? Bool ?? false
         )
     }
 

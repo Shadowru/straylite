@@ -35,6 +35,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     private var lastCounts: (Int, Int, Int, Int) = (0, 0, 0, 0)
     private let haptic = UIImpactFeedbackGenerator(style: .light)
+    private var lastHapticAt: Date = .distantPast
+    private let hapticMinInterval: TimeInterval = 2.0  // anti-spam
 
     // CIContext is documented as thread-safe; declared nonisolated so the
     // off-main rendering closure can use it without an actor hop.
@@ -257,10 +259,18 @@ extension CaptureCoordinator: RoomCaptureSessionDelegate {
             let prevTotal = lastCounts.0 + lastCounts.1 + lastCounts.2 + lastCounts.3
             if total > prevTotal {
                 lastDetectionAt = Date()
-                haptic.impactOccurred()
+                fireHapticIfAllowed()
             }
             lastCounts = counts
         }
+    }
+
+    private func fireHapticIfAllowed() {
+        guard AppSettings.current().hapticsEnabled else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastHapticAt) >= hapticMinInterval else { return }
+        lastHapticAt = now
+        haptic.impactOccurred()
     }
 }
 

@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.uploadToken) private var uploadToken: String = ""
     @AppStorage(SettingsKey.useVLM)      private var useVLM: Bool = true
     @AppStorage(SettingsKey.vlmFrames)   private var vlmFrames: Int = 3
+    @AppStorage(SettingsKey.hapticsEnabled) private var hapticsEnabled: Bool = false
 
     @State private var probing = false
     @State private var probeResult: String?
@@ -59,6 +60,13 @@ struct SettingsView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                }
+
+                Section("Scan UX") {
+                    Toggle("Haptic feedback on new detections", isOn: $hapticsEnabled)
+                    Text("RoomPlan refines detections continuously, so even rate-limited haptics can feel busy. Off by default.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("About") {
