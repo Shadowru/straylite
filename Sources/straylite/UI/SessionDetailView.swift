@@ -1,13 +1,14 @@
 import SwiftUI
+import RoomPlan
 
-/// Details of one session + a share button that exposes the scan folder
-/// (or its zip) via the standard share sheet.
+/// Details of one session with on-device previews of the captured room
+/// before upload: 2D floor plan, structured item list, sanity warnings,
+/// 3D SceneKit viewer, and a projected-OBB overlay on the sharpest frame.
 struct SessionDetailView: View {
     let session: Session
-    @State private var isSharing = false
-    @State private var shareURL: URL?
-    @State private var isZipping = false
-    @State private var zipError: String?
+
+    @State private var loaded: SessionDataLoader.Loaded?
+    @State private var isLoadingScan = true
 
     // Upload state
     @State private var isUploading = false
@@ -15,99 +16,159 @@ struct SessionDetailView: View {
     @State private var uploadResultURL: URL?
     @State private var uploadError: String?
 
+    // Share state
+    @State private var isSharing = false
+    @State private var shareURL: URL?
+    @State private var isZipping = false
+    @State private var zipError: String?
+
     var body: some View {
         Form {
-            Section("Metadata") {
-                LabeledContent("Name", value: session.name)
-                LabeledContent("ID", value: session.id.uuidString)
-                LabeledContent("Created",
-                               value: session.createdAt.formatted(date: .abbreviated,
-                                                                   time: .standard))
-                LabeledContent("Duration", value: formatDuration(session.duration))
-                LabeledContent("Walls", value: "\(session.wallCount)")
-                LabeledContent("Objects", value: "\(session.objectCount)")
-            }
-            Section("Files") {
-                if let folder = session.folderURL {
-                    Text(folder.path)
-                        .font(.caption.monospaced())
-                        .lineLimit(2)
-                    Text("\(fileCount(at: folder)) files")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Folder missing").foregroundStyle(.red)
-                }
-            }
-            Section("Upload") {
-                let settings = AppSettings.current()
-                if settings.canUpload {
-                    Button {
-                        uploadToServer(settings: settings)
-                    } label: {
-                        HStack {
-                            if isUploading {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .padding(.trailing, 4)
-                                Text(uploadProgress ?? "Working…")
-                            } else {
-                                Label("Upload to backend", systemImage: "icloud.and.arrow.up")
-                            }
-                        }
-                    }
-                    .disabled(session.folderURL == nil || isUploading)
-                    Text("Server: \(settings.serverURL)")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    if let url = uploadResultURL {
-                        Button {
-                            shareURL = url
-                            isSharing = true
-                        } label: {
-                            Label("Share returned .set", systemImage: "square.and.arrow.up")
-                        }
-                    }
-                    if let err = uploadError {
-                        Text(err)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                } else {
-                    Text("Configure server URL + token in Settings to upload directly.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Section("Share") {
-                Button {
-                    shareAsZip()
-                } label: {
-                    HStack {
-                        if isZipping {
-                            ProgressView()
-                                .controlSize(.small)
-                                .padding(.trailing, 4)
-                            Text("Zipping…")
-                        } else {
-                            Label("Share scan (.zip)", systemImage: "square.and.arrow.up")
-                        }
+            metadataSection
+            if isLoadingScan {
+                Section { ProgressView("Loading scan data…") }
+            } else {
+                if let room = loaded?.room {
+                    sanitySection(room: room)
+                    floorPlanSection(room: room)
+                    room3DSection
+                    itemListSection(room: room)
+                    if let frame = loaded?.bestFrame {
+                        projectedSection(room: room, frame: frame)
                     }
                 }
-                .disabled(session.folderURL == nil || isZipping)
-                if let err = zipError {
-                    Text(err)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
+                uploadSection
+                shareSection
             }
         }
         .navigationTitle(session.name)
         .sheet(isPresented: $isSharing) {
-            if let url = shareURL {
-                ShareSheet(items: [url])
+            if let url = shareURL { ShareSheet(items: [url]) }
+        }
+        .task {
+            guard let folder = session.folderURL else { isLoadingScan = false; return }
+            loaded = await SessionDataLoader.load(folder: folder)
+            isLoadingScan = false
+        }
+    }
+
+    // MARK: - Sections
+
+    private var metadataSection: some View {
+        Section("Metadata") {
+            LabeledContent("Name", value: session.name)
+            LabeledContent("ID", value: session.id.uuidString)
+            LabeledContent("Created",
+                           value: session.createdAt.formatted(date: .abbreviated,
+                                                              time: .standard))
+            LabeledContent("Duration", value: formatDuration(session.duration))
+            LabeledContent("Walls", value: "\(session.wallCount)")
+            LabeledContent("Objects", value: "\(session.objectCount)")
+        }
+    }
+
+    private func sanitySection(room: CapturedRoom) -> some View {
+        Section {
+            SanityWarningsView(room: room)
+        }
+    }
+
+    private func floorPlanSection(room: CapturedRoom) -> some View {
+        Section("Floor plan") {
+            FloorPlanView(room: room)
+                .frame(height: 240)
+        }
+    }
+
+    @ViewBuilder
+    private var room3DSection: some View {
+        if let folder = session.folderURL {
+            let usdz = folder.appendingPathComponent("roomplan.usdz")
+            if FileManager.default.fileExists(atPath: usdz.path) {
+                Section("3D preview") {
+                    Room3DPreview(usdzURL: usdz)
+                        .frame(height: 280)
+                        .background(.black,
+                                    in: RoundedRectangle(cornerRadius: 8))
+                }
             }
         }
     }
+
+    private func itemListSection(room: CapturedRoom) -> some View {
+        Section("Detected items") {
+            RoomItemListView(room: room)
+        }
+    }
+
+    private func projectedSection(room: CapturedRoom,
+                                  frame: SessionDataLoader.BestFrame) -> some View {
+        Section("Projected OBBs on key frame") {
+            ProjectedOBBPreview(room: room, frame: frame)
+        }
+    }
+
+    private var uploadSection: some View {
+        Section("Upload") {
+            let settings = AppSettings.current()
+            if settings.canUpload {
+                Button {
+                    uploadToServer(settings: settings)
+                } label: {
+                    HStack {
+                        if isUploading {
+                            ProgressView()
+                                .controlSize(.small)
+                                .padding(.trailing, 4)
+                            Text(uploadProgress ?? "Working…")
+                        } else {
+                            Label("Upload to backend", systemImage: "icloud.and.arrow.up")
+                        }
+                    }
+                }
+                .disabled(session.folderURL == nil || isUploading)
+                Text("Server: \(settings.serverURL)")
+                    .font(.caption2).foregroundStyle(.secondary)
+                if let url = uploadResultURL {
+                    Button {
+                        shareURL = url
+                        isSharing = true
+                    } label: {
+                        Label("Share returned .set", systemImage: "square.and.arrow.up")
+                    }
+                }
+                if let err = uploadError {
+                    Text(err).font(.caption).foregroundStyle(.red)
+                }
+            } else {
+                Text("Configure server URL + token in Settings to upload directly.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var shareSection: some View {
+        Section("Share") {
+            Button {
+                shareAsZip()
+            } label: {
+                HStack {
+                    if isZipping {
+                        ProgressView().controlSize(.small).padding(.trailing, 4)
+                        Text("Zipping…")
+                    } else {
+                        Label("Share scan (.zip)", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
+            .disabled(session.folderURL == nil || isZipping)
+            if let err = zipError {
+                Text(err).font(.caption).foregroundStyle(.red)
+            }
+        }
+    }
+
+    // MARK: - Actions
 
     private func uploadToServer(settings: AppSettings) {
         guard let folder = session.folderURL,
@@ -191,27 +252,14 @@ struct SessionDetailView: View {
         let secs = Int(s)
         return String(format: "%02d:%02d", secs / 60, secs % 60)
     }
-
-    private func fileCount(at url: URL) -> Int {
-        let enumerator = FileManager.default.enumerator(
-            at: url,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )
-        var n = 0
-        while enumerator?.nextObject() != nil { n += 1 }
-        return n
-    }
 }
 
 /// UIActivityViewController wrapper so SwiftUI can present the iOS share sheet.
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
-
     func makeUIViewController(context: Context) -> UIActivityViewController {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
-
     func updateUIViewController(_ uiViewController: UIActivityViewController,
                                 context: Context) {}
 }

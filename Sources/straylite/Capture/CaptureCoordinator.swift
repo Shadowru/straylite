@@ -319,7 +319,7 @@ extension CaptureCoordinator: ARSessionDelegate {
             if self.inboundFrameCount % self.frameStride != 0 { return }
             self.rgbEncoder?.add(frame: frame)
             self.depthEncoder?.add(frame: frame)
-            self.odometryEncoder?.add(frame: frame)
+            self.odometryEncoder?.add(frame: frame, sharpness: self.blurScore)
         }
     }
 
