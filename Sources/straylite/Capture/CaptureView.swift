@@ -45,6 +45,9 @@ struct CaptureView: View {
                             MinimapView(room: coordinator.liveRoom,
                                         camera: coordinator.latestCamera)
                         }
+                        // Constrain so liveRoom updates can't grow this column
+                        // past the right edge.
+                        .fixedSize(horizontal: true, vertical: true)
                     }
                     .padding(.horizontal, 12)
                     .padding(.top, 6)

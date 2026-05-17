@@ -68,10 +68,14 @@ struct CoachingBanner: View {
         return Group {
             if !label.isEmpty {
                 Text(label)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .minimumScaleFactor(0.8)
                     .foregroundStyle(color)
-                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(.black.opacity(0.55), in: Capsule())
+                    .frame(maxWidth: 240)
             }
         }
     }
@@ -215,13 +219,19 @@ struct ObjectWireframeOverlay: View {
             guard let r = room, let cam = camera,
                   viewSize.width > 0, viewSize.height > 0 else { return }
 
-            // Apple-supplied projection: handles orientation, fov, distortion.
-            // Returns CGPoint(NaN, NaN) for points outside the visible frustum.
+            // Reasonable bounding box for valid projections; reject points
+            // that fall absurdly far outside the view (caused by transient
+            // bad camera transforms right when AR session starts).
+            let bounds = CGRect(x: -viewSize.width, y: -viewSize.height,
+                                width: viewSize.width * 3,
+                                height: viewSize.height * 3)
+
             func project(_ world: simd_float3) -> CGPoint? {
                 let p = cam.projectPoint(world,
                                          orientation: .portrait,
                                          viewportSize: viewSize)
-                if p.x.isNaN || p.y.isNaN { return nil }
+                if !p.x.isFinite || !p.y.isFinite { return nil }
+                if !bounds.contains(p) { return nil }
                 return p
             }
 

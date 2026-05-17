@@ -245,16 +245,22 @@ extension CaptureCoordinator: RoomCaptureSessionDelegate {
     }
 
     private func applyLive(room: CapturedRoom) {
-        self.liveRoom = room
         let counts = (room.walls.count, room.doors.count,
                       room.windows.count, room.objects.count)
-        let total = counts.0 + counts.1 + counts.2 + counts.3
-        let prevTotal = lastCounts.0 + lastCounts.1 + lastCounts.2 + lastCounts.3
-        if total > prevTotal {
-            lastDetectionAt = Date()
-            haptic.impactOccurred()
+        let changed = counts != lastCounts
+        // SwiftUI body re-runs on every @Published assignment. RoomPlan ticks
+        // ~6 Hz with mostly identical snapshots, so only publish when the
+        // visible HUD state actually changes.
+        if changed {
+            self.liveRoom = room
+            let total = counts.0 + counts.1 + counts.2 + counts.3
+            let prevTotal = lastCounts.0 + lastCounts.1 + lastCounts.2 + lastCounts.3
+            if total > prevTotal {
+                lastDetectionAt = Date()
+                haptic.impactOccurred()
+            }
+            lastCounts = counts
         }
-        lastCounts = counts
     }
 }
 
